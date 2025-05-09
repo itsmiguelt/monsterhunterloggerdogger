@@ -1,0 +1,24 @@
+# Ignore Excel temp and backup files
+*.bak
+*.tmp
+*.xlb
+*.xlsb
+*.~*
+
+# Ignore LibreHardwareMonitor logs and output
+lhm_logs/
+*.log
+*.csv
+
+# Ignore user/system-specific PowerShell files
+*.ps1.xml
+*.psm1
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Ignore zip archives and test outputs
+*.zip
+/test_output/
