@@ -1,106 +1,75 @@
-# PowerShell System Monitor Logger with LibreHardwareMonitor integration
+# PowerShell: log_system_monitor.ps1
+$logPath = "$PSScriptRoot\..\logs"
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$csvFile = Join-Path $logPath "session_$timestamp.csv"
+$targetProcess = "MonsterHunterWilds.exe"
 
-$logFile = "system_log.csv"
-$lhmPath = "C:\Tools\LibreHardwareMonitor\LibreHardwareMonitor.exe"
-$lhmLogPath = "C:\Tools\lhm_logs\latest.csv"
-$targetProcess = "MonsterHunterWilds"
-$checkInterval = 5
-
-# Launch LibreHardwareMonitor if not already running
-if (-not (Get-Process | Where-Object { $_.Path -eq $lhmPath })) {
-    Start-Process -FilePath $lhmPath -WindowStyle Minimized
-    Start-Sleep -Seconds 3
+if (!(Test-Path $logPath)) {
+    New-Item -ItemType Directory -Path $logPath | Out-Null
 }
 
-# Initialize log
-if (!(Test-Path $logFile)) {
-    "Timestamp,CPU_Temp,CPU_Usage,GPU_Temp,GPU_Usage,RAM_Usage,Disk_IO,Net_Down,Net_Up" | Out-File $logFile
-}
+# Header
+"Timestamp,CPU_Usage,Memory_Used(MB),Memory_Total(MB),Disk_Read_Bps,Disk_Write_Bps,Net_Received_Bps,Net_Sent_Bps,ActiveProcesses" | Out-File -FilePath $csvFile -Encoding utf8
 
-function Get-TempFromLHM {
-    if (!(Test-Path $lhmLogPath)) {
-        return @{ CPU_Temp = 0; GPU_Temp = 0 }
+# Check for game session start
+$gameStarted = $false
+$sessionRunning = $true
+
+Write-Output "Monitoring session started..."
+
+while ($sessionRunning) {
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    
+    # Get CPU Usage
+    $cpu = (Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue
+
+    # Get RAM Usage
+    $os = Get-CimInstance Win32_OperatingSystem
+    $memTotal = [math]::Round($os.TotalVisibleMemorySize / 1024, 2)
+    $memFree = [math]::Round($os.FreePhysicalMemory / 1024, 2)
+    $memUsed = $memTotal - $memFree
+
+    # Get Disk Read/Write
+    $diskRead = (Get-Counter '\PhysicalDisk(_Total)\Disk Read Bytes/sec').CounterSamples.CookedValue
+    $diskWrite = (Get-Counter '\PhysicalDisk(_Total)\Disk Write Bytes/sec').CounterSamples.CookedValue
+
+    # Get Network Usage
+    $netRecv = (Get-Counter '\Network Interface(*)\Bytes Received/sec').CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum
+    $netSent = (Get-Counter '\Network Interface(*)\Bytes Sent/sec').CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum
+
+    # Get process list
+    $activeProcs = (Get-Process | Select-Object -ExpandProperty ProcessName) -join ";"
+
+    # Check for game start
+    if (Get-Process -Name ($targetProcess -replace ".exe$", "") -ErrorAction SilentlyContinue) {
+        if (-not $gameStarted) {
+            Write-Output "Game started at $timestamp"
+            $gameStarted = $true
+        }
+    } elseif ($gameStarted) {
+        Write-Output "Game closed. Ending session."
+        $sessionRunning = $false
+        break
     }
 
-    $lines = Get-Content $lhmLogPath
-    $lastLine = $lines[-1]
-    $columns = $lastLine -split ','
+    # Log to CSV
+    "$timestamp,$cpu,$memUsed,$memTotal,$diskRead,$diskWrite,$netRecv,$netSent,""$activeProcs""" | Out-File -Append -FilePath $csvFile -Encoding utf8
 
-    $cpuTemp = 0
-    $gpuTemp = 0
-
-    foreach ($line in $lines) {
-        if ($line -match "CPU Package" -and $line -match "Temperature") {
-            $cpuTemp = [double]($line -split ',')[-1]
-        }
-        if ($line -match "GPU Core" -and $line -match "Temperature") {
-            $gpuTemp = [double]($line -split ',')[-1]
-        }
-    }
-
-    return @{ CPU_Temp = $cpuTemp; GPU_Temp = $gpuTemp }
+    Start-Sleep -Seconds 5
 }
 
-function Get-SystemStats {
-    $temps = Get-TempFromLHM
-    $stats = @{
-        Timestamp = (Get-Date).ToString("s")
-        CPU_Temp = $temps.CPU_Temp
-        CPU_Usage = (Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples[0].CookedValue
-        GPU_Temp = $temps.GPU_Temp
-        GPU_Usage = (Get-Counter '\GPU Engine(*)\Utilization Percentage' | Where-Object { $_.InstanceName -like "*engtype_3D*" }).CounterSamples | Measure-Object -Property CookedValue -Average | Select-Object -ExpandProperty Average
-        RAM_Usage = (Get-Counter '\Memory\% Committed Bytes In Use').CounterSamples[0].CookedValue
-        Disk_IO = (Get-Counter '\PhysicalDisk(_Total)\Disk Bytes/sec').CounterSamples[0].CookedValue / 1MB
-        Net_Down = (Get-Counter '\Network Interface(*)\Bytes Received/sec').CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum
-        Net_Up = (Get-Counter '\Network Interface(*)\Bytes Sent/sec').CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum
-    }
-    return $stats
-}
-
-function Write-StatsToCSV($stats) {
-    "$($stats.Timestamp),$([math]::Round($stats.CPU_Temp,2)),$([math]::Round($stats.CPU_Usage,2)),$([math]::Round($stats.GPU_Temp,2)),$([math]::Round($stats.GPU_Usage,2)),$([math]::Round($stats.RAM_Usage,2)),$([math]::Round($stats.Disk_IO,2)),$([math]::Round($stats.Net_Down / 1MB,2)),$([math]::Round($stats.Net_Up / 1MB,2))" | Out-File -FilePath $logFile -Append
-}
-
-$wasRunning = $false
-
-while ($true) {
-    $isRunning = Get-Process -Name $targetProcess -ErrorAction SilentlyContinue
-
-    $stats = Get-SystemStats
-    Write-StatsToCSV $stats
-
-    if ($isRunning) {
-        if (-not $wasRunning) {
-            Write-Host "Session started: $targetProcess"
-        }
-        $wasRunning = $true
-    } else {
-        if ($wasRunning) {
-            Write-Host "Session ended: $targetProcess"
-            Start-Sleep -Seconds 2
-
-            # Run Excel macro after session ends
-            $excelPath = "C:\Path\To\system_monitor_template.xlsm"
-            $macroName = "AutoGraphSystemData"
-
-            $excel = New-Object -ComObject Excel.Application
-            $excel.Visible = $false
-            $excel.DisplayAlerts = $false
-
-            $workbook = $excel.Workbooks.Open($excelPath)
-            $excel.Run($macroName)
-            $workbook.Save()
-            $workbook.Close($false)
-            $excel.Quit()
-
-            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook) | Out-Null
-            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
-            [GC]::Collect()
-            [GC]::WaitForPendingFinalizers()
-
-            $wasRunning = $false
-        }
-    }
-
-    Start-Sleep -Seconds $checkInterval
+# Open Excel and run macro
+$excelPath = "$PSScriptRoot\system_monitor_template.xlsm"
+if (Test-Path $excelPath) {
+    $excel = New-Object -ComObject Excel.Application
+    $excel.Visible = $false
+    $workbook = $excel.Workbooks.Open($excelPath)
+    $excel.Run("GenerateGraphs", $csvFile)
+    $workbook.Save()
+    $workbook.Close()
+    $excel.Quit()
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+    Write-Output "Excel macro executed to generate graphs."
+} else {
+    Write-Warning "Excel template not found at $excelPath"
 }
