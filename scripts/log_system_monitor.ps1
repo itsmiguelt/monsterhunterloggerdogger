@@ -1,5 +1,5 @@
 # PowerShell: log_system_monitor.ps1
-$logPath = "$PSScriptRoot\..\logs"
+$logPath = "C:\Users\Miguel\OneDrive\Documents\GitHub\monsterhunterloggerdogger\logs"
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $csvFile = Join-Path $logPath "session_$timestamp.csv"
 $targetProcess = "MonsterHunterWilds.exe"
@@ -59,12 +59,12 @@ while ($sessionRunning) {
 }
 
 # Open Excel and run macro
-$excelPath = "$PSScriptRoot\system_monitor_template.xlsm"
+$excelPath = "C:\Users\Miguel\OneDrive\Documents\GitHub\monsterhunterloggerdogger\excel\system_monitor_template.xlsm"
 if (Test-Path $excelPath) {
     $excel = New-Object -ComObject Excel.Application
     $excel.Visible = $false
     $workbook = $excel.Workbooks.Open($excelPath)
-    $excel.Run("GenerateGraphs", $csvFile)
+    $excel.Run("AutoGraphSystemData", $csvFile)
     $workbook.Save()
     $workbook.Close()
     $excel.Quit()
